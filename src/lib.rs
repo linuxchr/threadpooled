@@ -1,27 +1,32 @@
-use crossbeam_channel::{unbounded, Receiver, Sender};
+use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
 
+pub type ThreadId = usize;
+
+#[derive(Debug)]
+
 pub struct Threadpool {
-    pub max_threads: u128,
+    pub max_threads: usize,
     pub id: u8,
-    used_threads: u128,
-    thread_send: Sender<(u128, JoinHandle<()>)>,
+    used_threads: Vec<Thread>,
+    thread_send: Vec<(ThreadId, JoinHandle<()>)>,
     used_ids: Vec<u128>,
-    done: Vec<u128>,
+    done: Vec<ThreadId>,
 }
 
-pub struct Thread<'a> {
-    id: u128,
+#[derive(Debug)]
+pub struct Thread {
+    id: ThreadId,
     done: bool,
-    origin: &'a mut Threadpool,
+    origin: ThreadId,
 }
 
 #[derive(Error, Debug)]
 pub enum ThreadingError {
     #[error("No threads available (max is {max_threads:?})")]
-    NoAvaliableThreads { max_threads: u128 },
+    NoAvaliableThreads { max_threads: usize },
     #[error("Manager communication failed")]
     ManagerCommunicationFailed,
     #[error("Used thread check failed")]
@@ -49,52 +54,34 @@ fn manage(bx: &Sender<u128>, rx: &Receiver<(u128, JoinHandle<()>)>) {
     });
 }
 
-pub fn manager(pool: &Threadpool) {
-    let (tx, rx) = crossbeam_channel::unbounded();
-    let (bx, brx) = unbounded();
-    thread::spawn(move || {
-        let sender = bx;
-        let receiver = rx;
-        loop {
-            Threadpool::manage(&sender, &receiver);
-        }
+pub fn new(max_threads: usize, id: u8) -> Threadpool {
+    let mut pool = Threadpool::new(max_threads, id);
+    thread::spawn(|| {
+        pool.manage();
     });
+    return pool;
 }
 
-fn new(max_threads: u128, id: u128) -> Self {}
-
-pub impl Threadpool {
-    fn manage(bx: &Sender<u128>, rx: &Receiver<(u128, JoinHandle<()>)>) {
-        let mut threads: HashMap<u128, JoinHandle<()>> = HashMap::new();
-        if let Ok(t) = rx.try_recv() {
-            let (id, handle) = t;
-            threads.insert(id, handle);
+impl Threadpool {
+    fn manage(&mut self) {
+        let mut threads: HashMap<usize, &JoinHandle<()>> = HashMap::new();
+        for (id, handle) in self.thread_send.iter() {
+            threads.insert(*id, handle);
         }
         threads.retain(|id, handle| {
             if handle.is_finished() {
-                if let Ok(_) = bx.send(*id) {
-                    return false;
-                }
+                self.done.push(*id);
                 return true;
             }
             return true;
         });
     }
-    fn new(max_threads: u128, id: u8) -> Self {
-        let (tx, rx) = crossbeam_channel::unbounded();
-        let (bx, brx) = unbounded();
-        thread::spawn(move || {
-            let sender = bx;
-            let receiver = rx;
-            loop {
-                manager(&sender, &receiver);
-            }
-        });
+    pub fn new(max_threads: usize, id: u8) -> Self {
         let tp = Threadpool {
             max_threads,
             id,
-            used_threads: 0,
-            thread_send: tx,
+            used_threads: Vec::new(),
+            thread_send: Vec::new(),
             used_ids: Vec::new(),
             done: Vec::new(),
         };
@@ -102,38 +89,26 @@ pub impl Threadpool {
     }
 
     pub fn assing<F: Fn() + Send + 'static>(&mut self, f: F) -> Result<Thread, ThreadingError> {
-        if self.used_threads >= self.max_threads {
+        if self.used_threads.len() >= self.max_threads {
             return Err(ThreadingError::NoAvaliableThreads {
                 max_threads: self.max_threads,
             });
         }
         let handle = thread::spawn(f);
         self.used_threads += 1;
-        let mut id_try = self.used_threads;
-        let id: u128;
+        let mut id_try = self.used_threads.len();
+        let id: usize;
         while self.used_ids.contains(&id_try) {
             id_try += 1;
         }
         id = id_try;
-        if let Err(_) = self.thread_send.send((id, handle)) {
-            self.used_threads -= 1;
-            return Err(ThreadingError::ManagerCommunicationFailed);
-        }
+        self.thread_send.push((id, handle));
         let thread = Thread {
             id: id,
             done: false,
-            origin: self,
+            origin: self.id,
         };
         return Ok(thread);
-    }
-}
-
-impl Thread<'_> {
-    pub fn is_finished(&mut self) -> Result<bool, ThreadingError> {
-        if !self.done {
-            return Ok(self.done);
-        }
-        Ok(self.done)
     }
 }
 
