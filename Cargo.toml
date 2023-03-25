@@ -3,7 +3,11 @@ name = "threadpooled"
 version = "0.1.0"
 edition = "2021"
 author = "linuxchr"
-desciption = "Threadpool implementation"
+description = "Threadpool implementation"
+license = "LGPLv3"
+documentation = "https://docs.rs/threadpooled"
+repository = "https://github.com/linuxchr/threadpooled"
+
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
