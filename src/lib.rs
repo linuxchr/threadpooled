@@ -1,4 +1,3 @@
-use crossbeam_channel::{Receiver, Sender};
 use std::collections::HashMap;
 use std::thread::{self, JoinHandle};
 use thiserror::Error;
@@ -8,22 +7,13 @@ pub type ThreadId = usize;
 #[derive(Debug)]
 
 pub struct Threadpool {
-    pub max_threads: usize,
-    pub id: u8,
-    used_threads: Vec<Thread>,
-    thread_send: Vec<(ThreadId, JoinHandle<()>)>,
-    used_ids: Vec<u128>,
-    done: Vec<ThreadId>,
+    max_threads: usize,
+    thread_handles: HashMap<ThreadId, (JoinHandle<()>, i32)>,
+    used_ids: Vec<usize>,
+    used_threads: usize,
 }
 
-#[derive(Debug)]
-pub struct Thread {
-    id: ThreadId,
-    done: bool,
-    origin: ThreadId,
-}
-
-#[derive(Error, Debug)]
+#[derive(Debug, Copy, Clone, Error)]
 pub enum ThreadingError {
     #[error("No threads available (max is {max_threads:?})")]
     NoAvaliableThreads { max_threads: usize },
@@ -35,91 +25,71 @@ pub enum ThreadingError {
     ThreadFreeingFailed,
     #[error("Thread state broadcasting failed")]
     ThreadStateBroadcastingFailed,
-}
-
-fn manage(bx: &Sender<u128>, rx: &Receiver<(u128, JoinHandle<()>)>) {
-    let mut threads: HashMap<u128, JoinHandle<()>> = HashMap::new();
-    if let Ok(t) = rx.try_recv() {
-        let (id, handle) = t;
-        threads.insert(id, handle);
-    }
-    threads.retain(|id, handle| {
-        if handle.is_finished() {
-            if let Ok(_) = bx.send(*id) {
-                return false;
-            }
-            return true;
-        }
-        return true;
-    });
-}
-
-pub fn new(max_threads: usize, id: u8) -> Threadpool {
-    let mut pool = Threadpool::new(max_threads, id);
-    thread::spawn(|| {
-        pool.manage();
-    });
-    return pool;
+    #[error("Thread away giving failed")]
+    ThreadAwayFailed,
+    #[error("Thread might attempt to join itself or created a deadlock")]
+    ThreadJoinFailed,
+    #[error("Thread dont exist")]
+    ThreadNotFound,
 }
 
 impl Threadpool {
-    fn manage(&mut self) {
-        let mut threads: HashMap<usize, &JoinHandle<()>> = HashMap::new();
-        for (id, handle) in self.thread_send.iter() {
-            threads.insert(*id, handle);
-        }
-        threads.retain(|id, handle| {
-            if handle.is_finished() {
-                self.done.push(*id);
-                return true;
-            }
-            return true;
-        });
-    }
-    pub fn new(max_threads: usize, id: u8) -> Self {
-        let tp = Threadpool {
+    pub fn new(max_threads: usize) -> Self {
+        Threadpool {
             max_threads,
-            id,
-            used_threads: Vec::new(),
-            thread_send: Vec::new(),
+            thread_handles: HashMap::new(),
             used_ids: Vec::new(),
-            done: Vec::new(),
-        };
-        return tp;
+            used_threads: 0,
+        }
     }
 
-    pub fn assing<F: Fn() + Send + 'static>(&mut self, f: F) -> Result<Thread, ThreadingError> {
-        if self.used_threads.len() >= self.max_threads {
+    pub fn assing<F: Fn() + Send + 'static>(&mut self, f: F) -> Result<ThreadId, ThreadingError> {
+        for (_, (handle, used)) in self.thread_handles.iter_mut() {
+            if used == &0 && handle.is_finished() {
+                *used = 1;
+                self.used_threads -= 1;
+            }
+        }
+        if self.used_threads >= self.max_threads {
             return Err(ThreadingError::NoAvaliableThreads {
                 max_threads: self.max_threads,
             });
         }
         let handle = thread::spawn(f);
         self.used_threads += 1;
-        let mut id_try = self.used_threads.len();
-        let id: usize;
+        let mut id_try: ThreadId = self.used_threads;
         while self.used_ids.contains(&id_try) {
             id_try += 1;
         }
-        id = id_try;
-        self.thread_send.push((id, handle));
-        let thread = Thread {
-            id: id,
-            done: false,
-            origin: self.id,
-        };
-        return Ok(thread);
+        let id: ThreadId = id_try;
+        self.thread_handles.insert(id, (handle, 0));
+        Ok(id)
+    }
+    pub fn is_finished(&mut self, th: ThreadId) -> Result<bool, ThreadingError> {
+        if let Some((handle, used)) = self.thread_handles.get_mut(&th) {
+            if handle.is_finished() {
+                if used == &0 {
+                    *used = 1;
+                    self.used_threads -= 1;
+                }
+                return Ok(true);
+            }
+        } else {
+            return Err(ThreadingError::ThreadNotFound);
+        }
+        Ok(false)
+    }
+    /// !!! Consumes the Input Thread, dont use it after that !!!
+    pub fn join(&mut self, th: ThreadId) -> Result<(), ThreadingError> {
+        match self.thread_handles.remove(&th) {
+            None => Err(ThreadingError::ThreadNotFound),
+            Some((handle, _)) => {
+                if handle.join().is_err() {
+                    return Err(ThreadingError::ThreadJoinFailed);
+                }
+                self.used_threads -= 1;
+                Ok(())
+            }
+        }
     }
 }
-
-/*
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}*/
