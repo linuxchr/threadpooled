@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 author = "linuxchr"
 description = "Threadpool implementation"
-license = "LGPLv3"
+license = "LGPL-3.0-only"
 documentation = "https://docs.rs/threadpooled"
 repository = "https://github.com/linuxchr/threadpooled"
 
