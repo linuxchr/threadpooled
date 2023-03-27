@@ -104,7 +104,7 @@ impl Threadpool {
                 self.used_threads -= 1;
             }
             self.thread_handles.remove(&th);
-            self.used_ids.remove(th);
+            self.used_ids.remove(th - 1);
             return Ok(());
         }
         Err(ThreadingError::ThreadNotFound)
