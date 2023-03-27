@@ -31,6 +31,8 @@ pub enum ThreadingError {
     ThreadJoinFailed,
     #[error("Thread dont exist")]
     ThreadNotFound,
+    #[error("Can only remove finished threads")]
+    ThreadRemovingFinished,
 }
 
 impl Threadpool {
@@ -91,5 +93,20 @@ impl Threadpool {
                 Ok(())
             }
         }
+    }
+    pub fn remove(&mut self, th: ThreadId) -> Result<(), ThreadingError> {
+        if let Some((handle, used)) = self.thread_handles.get_mut(&th) {
+            if !handle.is_finished() {
+                return Err(ThreadingError::ThreadRemovingFinished);
+            }
+            if used == &0 {
+                *used = 1;
+                self.used_threads -= 1;
+            }
+            self.thread_handles.remove(&th);
+            self.used_ids.remove(th);
+            return Ok(());
+        }
+        Err(ThreadingError::ThreadNotFound)
     }
 }
